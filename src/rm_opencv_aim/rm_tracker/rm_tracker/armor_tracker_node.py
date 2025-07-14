@@ -7,6 +7,7 @@ from rm_interfaces.msg import ArmorsCppMsg, ArmorCppInfo, ArmorTracking, Decisio
 from rm_tracker.armor_tracker import select_tracking_armor, pixel_to_angle_and_deep, Armor
 from rcl_interfaces.msg import SetParametersResult  # 导入 SetParametersResult 消息类型
 from rm_tracker.Kalman import KalmanFilter
+from  std_msgs.msg import Int32 
     
 class ArmorTrackerNode(Node):
     def __init__(self, name):
@@ -20,6 +21,13 @@ class ArmorTrackerNode(Node):
 
         self.sub_serial = self.create_subscription(
             Decision, '/nav/decision', self.listener_callback_serial, 10)  # 订阅串口数据
+        
+        self.pub_tracker = self.create_publisher(
+            ArmorTracking,'/tracker/target',10)
+        
+        self.pub_fire = self.create_publisher(
+            Int32, '/fire', 10)
+        
 
         self.pic_width = 1024       # 随便初始化一个图像宽度
         self.fov = 72
@@ -43,6 +51,15 @@ class ArmorTrackerNode(Node):
         self.tracking_color = 1     # 1蓝色表示, 0表示红色, 现初始化为蓝色
         self.follow_decision = 0
         self.tracking_armor = []    # 初始化追踪装甲板为列表
+
+        self.before_yaw = None    
+        self.before_pitch = None
+        self.stable_count = 0
+        self.stable_threshold = 4
+        self.yaw_tolerance = 0.5          
+        self.pitch_tolerance = 0.5        
+        self.min_deep = 1.0                
+        self.max_deep = 5.0  
 
         self.declare_parameter('use_kf', self.use_kf)
         self.declare_parameter('frame_add', self.frame_add)
@@ -151,6 +168,7 @@ class ArmorTrackerNode(Node):
             # 计算角度和深度
             yaw, pitch, deep = pixel_to_angle_and_deep(self.height_last, self.center_last, self.fov, self.pic_width)
             buff = deep * self.deep_buff
+
 
             # 创建并填充消息
             tracking_armor_msg = ArmorTracking()
