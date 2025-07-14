@@ -42,5 +42,6 @@
         "/opt/ros/humble/local/lib/python3.10/dist-packages"
     ],
     "ros.distro": "humble",
-    "files.autoSave": "afterDelay"
+    "files.autoSave": "afterDelay",
+    "cmake.sourceDirectory": "/home/ningjun/ros_ws/src/rm_interfaces"
 }

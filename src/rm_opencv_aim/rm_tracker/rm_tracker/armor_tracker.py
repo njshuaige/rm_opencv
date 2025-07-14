@@ -1,14 +1,119 @@
-import math
+import math 
+import numpy as np 
 
-# 定义常量, 弧度转角度
-RAD2DEG = 180 / math.pi
-DEG2RAD = math.pi / 180
+RAD2DEG = 180/math.pi#角度转化--弧度
+DEG2RAD = math.pi/180
 
 class Armor:
-    def __init__(self, class_id, center, height):
-        self.class_id = class_id
-        self.center = center
+    def __init__(self, class_id, center, height, number=None, pose=None, armor_type=None):
+        self.class_id = class_id#初始化定义
+        self.center = center  
         self.height = height
+        self.number = number  
+        self.pose = pose     
+        self.type = armor_type
+class EKF:
+    def __init__(self, dt=0.1):
+        self.n = 9  # 状态维度
+        self.m = 4  # 观测维度
+        self.dt = dt
+
+        self.x = np.zeros((self.n, 1))
+        self.P = np.eye(self.n) * 1e3
+
+        # 状态转移矩阵 (动态更新)
+        self.F = np.eye(self.n)
+
+        # 观测矩阵
+        self.H = np.zeros((self.m, self.n))
+        self.H[0, 0] = 1
+        self.H[1, 2] = 1
+        self.H[2, 4] = 1
+        self.H[3, 6] = 1
+
+        # 过程噪声和观测噪声
+        self.Q = np.eye(self.n) * 1e-2
+        self.R = np.eye(self.m) * 1e-1
+        self.I = np.eye(self.n)
+
+    def set_state(self, state):
+        self.x = np.reshape(state, (self.n, 1))
+
+    def build_F(self):
+        F = np.eye(self.n)
+        dt = self.dt
+        F[0, 1] = dt  # x
+        F[2, 3] = dt  # y
+        F[4, 5] = dt  # z
+        F[6, 7] = dt  # yaw
+        self.F = F
+
+    def predict(self):
+        self.build_F()
+        self.x = np.dot(self.F, self.x)
+        self.P = np.dot(np.dot(self.F, self.P), self.F.T) + self.Q
+        return self.x.flatten()
+
+    def update(self, z):
+        z = np.reshape(z, (self.m, 1))
+        S = np.dot(self.H, np.dot(self.P, self.H.T)) + self.R
+        K = np.dot(np.dot(self.P, self.H.T), np.linalg.inv(S))
+        y = z - np.dot(self.H, self.x)
+        self.x = self.x + np.dot(K, y)
+        self.P = np.dot((self.I - np.dot(K, self.H)), self.P)
+        return self.x.flatten()
+
+    def set_Q(self, q_scale):
+        self.Q = np.eye(self.n) * q_scale
+
+    def set_R(self, r_scale):
+        self.R = np.eye(self.m) * r_scale
+
+
+class Tracker:
+    LOST = 0
+    DETECTING = 1
+    TRACKING = 2
+    TEMP_LOST = 3
+    CHANGE_TARGET = 4
+
+    def __init__(self, max_match_distance, max_match_yaw_diff):
+        self.tracker_state = self.LOST
+        self.tracked_id = ""
+        self.measurement = np.zeros(4)
+        self.target_state = np.zeros(9)
+        self.max_match_distance_ = max_match_distance
+        self.max_match_yaw_diff_ = max_match_yaw_diff
+
+        self.ekf = EKF(dt=0.1)
+
+        self.last_yaw_ = 0.0
+        self.change_count_ = 0
+        self.change_thres = 20
+        self.detect_count_ = 0
+        self.tracking_thres = 5
+        self.lost_count_ = 0
+        self.lost_thres = 5
+
+        self.tracked_armor = None
+        self.another_r = 0
+        self.dz = 0
+
+    def init_ekf(self, init_state):
+        self.ekf.set_state(init_state)
+        self.target_state = init_state.copy()
+
+    def predict(self):
+        self.target_state = self.ekf.predict()
+
+    def update(self, measurement):
+        self.target_state = self.ekf.update(measurement)
+
+    def set_noise(self, q_scale, r_scale):
+        self.ekf.set_Q(q_scale)
+        self.ekf.set_R(r_scale)
+
+
 
 def select_tracking_armor(msg, color, track_height_tol):
     """
@@ -57,44 +162,5 @@ def select_tracking_armor(msg, color, track_height_tol):
     # 否则，返回 y 坐标最高的装甲板
     return [top_two[0]]
 
-def deep_cal(x):
-    if x <= 0:
-        return 0
-    # https://mycurvefit.com/ 
-    # 测了若干组像素对应距离的数据，输入上述网站计算得到的像素-距离公式
-    a = -12.75855
-    b = 2162.459
-    c = 4.823192
-    d = 1.161739
-    
-    y = a + (b - a) / (1 + (x / c) ** d)
-    return y
 
-def pixel_to_angle_and_deep(height, center, vfov, pic_width):
-
-    deep = deep_cal(height) # 估计距离
-    # 确保 vfov 是以弧度为单位
-    vfov_radians = vfov * DEG2RAD
-    # 相机 x, y 坐标系下投影面的 Z 轴距离(单位: 像素)
-    focal_pixel_distance = (pic_width / 2) / math.tan(vfov_radians / 2)
-    # 确保 focal_pixel_distance 不为零
-    if focal_pixel_distance == 0:
-        focal_pixel_distance = 0.000_000_1
-    # 计算角度
-    yaw   = math.atan(center[0] / focal_pixel_distance) * RAD2DEG
-    pitch = math.atan(center[1] / focal_pixel_distance) * RAD2DEG
-    return yaw, pitch, deep
-
-if __name__ == "__main__":
-
-    armors_dict = {
-        "179":  {"class_id": 7, "height": 429, "center": [ 147,  333]},
-        "-143": {"class_id": 1, "height": 288, "center": [-143, -35]},
-        "175":  {"class_id": 7, "height": 1, "center": [ 149,  36]},
-        "-113": {"class_id": 1, "height": 300, "center": [ 91, -35]},
-    }
-
-    result = select_tracking_armor(armors_dict, 0, 20, 10)
-    if result:
-        yaw, pitch, deep = pixel_to_angle_and_deep(result["height"], result["center"], 55, 72)
-    
+                    
